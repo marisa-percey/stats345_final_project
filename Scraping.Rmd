@@ -1,0 +1,88 @@
+---
+title: "STATS345 Final Project - Songs"
+output: html_document
+date: "2026-04-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rvest)
+library(purrr)
+library(dplyr)
+
+years <- c(1959:2025)
+wiki_url <- str_c("https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_", years)
+all_songs <- vector("list", 67)
+
+for (i in 1:length(wiki_url)) {
+  all_songs[[i]] <- tibble(
+    
+  )
+}
+
+wiki_url <- "https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_1959"
+html <- read_html(wiki_url)
+songs <- html_nodes(html, "table")
+songs[[1]] |> html_table()
+
+wiki_url2 <- "https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_1960"
+html2 <- read_html(wiki_url2)
+songs2 <- html_nodes(html2, "table")
+songs2[[1]] |> html_table()
+
+```
+
+```{r}
+library(rvest)
+library(purrr)
+library(dplyr)
+
+years <- c(1959:2025)
+
+scrape_billboard <- function(year) {
+  url <- str_c("https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_", year)
+  Sys.sleep(1)
+  
+  # Try-catch to handle missing or changed pages
+  tryCatch({
+    page <- read_html(url)
+    
+    # Extract the first table (Wikipedia pages may have multiple tables)
+    table <- page %>%
+      html_element("table.wikitable") %>%
+      html_table()
+    
+    # Standardize column names (Wikipedia changes them sometimes)
+    colnames(table) <- tolower(colnames(table))
+    
+    # Select only the relevant columns (case-insensitive match)
+    table <- table %>%
+      select(
+        no = matches("^no|№"),
+        title = matches("title"),
+        artist = matches("artist")
+      ) %>%
+      mutate(year = year,
+             songlyrics_url = str_c("https://www.songlyrics.com/", 
+                            str_replace_all(str_replace_all(str_to_lower(artist), "[^a-z0-9]", ""), " ", "-"), "/",
+                            str_replace_all(str_replace_all(str_to_lower(title), "[^a-z0-9]", ""), " ", "-"), "-lyrics/"
+             ))  # Add year column
+    
+    
+    return(as_tibble(table))
+    
+  }, error = function(e) {
+    message("Skipping year ", year, " due to error: ", e$message)
+    return(NULL)  # Return NULL if scraping fails
+  })
+}
+
+# Scrape all years and combine efficiently
+billboard_data <- map(years, scrape_billboard) %>%
+ compact() %>%        # Remove NULLs from failed years
+  bind_rows()          # Combine all at once
+
+```
