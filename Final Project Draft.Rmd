@@ -1,0 +1,120 @@
+---
+title: "STAT345 - FINAL PROJECT"
+author: "Ava Woodruff, Marissa Percey, Ethan Leader, Layne Peters"
+date: "2026-04-21"
+output: html_document
+---
+
+``` {r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+``` {r libraries}
+library(rvest)
+library(tidyverse)
+library(purrr)
+```
+
+``` {r source}
+# WIKIPEDIA: SOURCED BILLBOARD LINKS
+billboard.links = read_html("https://en.wikipedia.org/wiki/Category:Lists_of_Billboard_Year-End_Hot_100_singles") %>%
+  html_elements("#mw-pages a") %>%
+  html_attr("href") %>%
+  keep(~ str_detect(.x, "Billboard_Year-End_Hot_100_singles_of_[0-9]{4}$")) %>%
+  str_c("https://en.wikipedia.org", .)
+```
+
+``` {r functions}
+# FUNCTION: SCRAPING EACH BILLBOARD YEAR FOR INFORMATION AND SONG LINKS
+scrape.year = function(url) {
+  
+  billboard.page = read_html(url)
+  
+  year = str_extract(url, "[0-9]{4}")
+  message("Scraping: ", year)
+  Sys.sleep(1)
+  
+  song.links = billboard.page %>%
+    html_elements("table.wikitable tr") %>% .[-1] %>%
+    map_chr(~ {
+      link = .x %>% html_element("td:nth-child(2) a") %>% html_attr("href")
+      if(is.na(link)) 
+        NA_character_
+      else 
+        str_c("https://en.wikipedia.org", link)})
+  
+  billboard.page %>%
+    html_element("table.wikitable") %>%
+    html_table() %>%
+    as_tibble() %>%
+    rename_with(~ "rank.col", any_of(c("№", "No."))) %>%
+    mutate(year = year, wiki.url = song.links) %>%
+    select(year, rank = rank.col, title = `Title`, artist = `Artist(s)`, wiki.url)
+}
+
+# FUNCTION: BUILDING SONGLYRICS URL PATH, SCRAPING LYRICS
+scrape.songlyrics = function(artist, title) {
+  # BUILD SONGLYRICS URL
+  artist.clean = artist %>%
+    str_to_lower() %>%
+    str_replace_all("&", "and") %>%
+    str_replace_all("[^a-z0-9]", "-") %>%
+    str_replace_all("-+", "-") %>%
+    str_remove("^-") %>%
+    str_remove("-$")
+  
+  title.clean = title %>%
+    str_to_lower() %>%
+    str_replace_all("&", "and") %>%
+    str_replace_all("[^a-z0-9]", "-") %>%
+    str_replace_all("-+", "-") %>%
+    str_remove("^-") %>%
+    str_remove("-$")
+  
+  songlyrics.url = str_c("https://www.songlyrics.com/", artist.clean, "/", title.clean, "-lyrics/")
+  
+  # STATUS/ITERATION MESSAGE W/PAUSING REQUESTS
+  i <<- i + 1
+  if (i %% 100 == 0) {
+    message("Pausing... ", i)
+    Sys.sleep(60)
+  } else {
+    message("Validating Row ", i, ": ", songlyrics.url)
+    Sys.sleep(0.5)
+  }
+  
+  # VALIDATION AND SCRAPING SUPPOSED URL
+  tryCatch({
+    songlyrics.page = read_html(songlyrics.url)
+    
+    # QUERYING/SEARCHING PAGE FOR LYRICS MARKER, SCRAPING
+    lyrics = songlyrics.page %>%
+      html_element("#songLyricsDiv") %>%
+      html_text2()
+    
+    if (is.na(lyrics)) {
+      list(songlyrics.url = NA_character_, lyrics = NA_character_)
+    } else {
+        list(songlyrics.url = songlyrics.url, lyrics = lyrics)
+    }
+    
+  }, error = function(e) {
+      list(songlyrics.url = NA_character_, lyrics = NA_character_)
+  })
+}
+```
+
+``` {r extraction}
+hot100.raw = billboard.links %>%
+  map(scrape.year) %>%
+  list_rbind()
+```
+
+``` {r}
+i = 0
+hot100.raw = hot100.raw %>%
+  mutate(results = map2(artist, title, scrape.songlyrics)) %>%
+  unnest_wider(results)
+```
+
+
