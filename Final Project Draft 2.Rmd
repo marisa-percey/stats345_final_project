@@ -116,24 +116,7 @@ hot100.raw = hot100.raw %>%
   mutate(results = map2(artist, title, scrape.songlyrics)) %>%
   unnest_wider(results)
 ```
-
-```{r}
-# TEST ONE URL FIRST
-wiki.url = hot100.raw$wiki.url[1]
-
-page = read_html(wiki.url)
-
-rows = page %>%
-  html_elements(".infobox tr") %>%
-  html_text2()
-
-rows
-
-rows %>% str_subset("Length")
-rows %>% str_subset("Label")
-rows %>% str_subset("Genre|Genres")
-
-
+``` {r}
 # FUNCTION
 scrape.wiki = function(wiki.url) {
   
@@ -145,30 +128,26 @@ scrape.wiki = function(wiki.url) {
       html_elements(".infobox tr") %>%
       html_text2()
     
-    # length
-    song.length = rows %>%
-      str_subset("Length") %>%
-      str_remove("Length") %>%
-      str_trim()
-    
-    # label
-    label = rows %>%
-      str_subset("Label") %>%
-      str_remove("Label") %>%
-      str_trim()
-    
-    # genre
-    genre = rows %>%
-      str_subset("Genre|Genres") %>%
-      str_remove("Genre|Genres") %>%
-      str_replace_all("\\[[0-9]+\\]", "") %>%   # remove [1], [2]
-      str_replace_all("\n", ", ") %>%           # fix line breaks
-      str_squish()
+    get_one <- function(x, pattern, remove_pattern = pattern) {
+      val <- x %>%
+        str_subset(pattern) %>%
+        str_remove(remove_pattern) %>%
+        str_trim()
+      
+      if (length(val) == 0) return(NA_character_)
+      val[1]   # ALWAYS take just one
+    }
     
     list(
-      song.length = ifelse(length(song.length) == 0, NA, song.length[1]),
-      label = ifelse(length(label) == 0, NA, label[1]),
-      genre = ifelse(length(genre) == 0, NA, genre[1])
+      song.length = get_one(rows, "Length"),
+      label       = get_one(rows, "Label"),
+      genre       = rows %>%
+        str_subset("Genre|Genres") %>%
+        str_remove("Genre|Genres") %>%
+        str_replace_all("\\[[0-9]+\\]", "") %>%
+        str_replace_all("\n", ", ") %>%
+        str_squish() %>%
+        { if (length(.) == 0) NA_character_ else .[1] }
     )
     
   }, error = function(e) {
@@ -180,27 +159,11 @@ scrape.wiki = function(wiki.url) {
     )
   })
 }
-
-
-# TEST FUNCTION ON 1 SONG
-scrape.wiki(hot100.raw$wiki.url[1])
-
-
-# TEST ON 5 SONGS
-test = hot100.raw %>%
-  slice(1:5)
-
-test = test %>%
-  mutate(wiki.results = map(wiki.url, scrape.wiki)) %>%
-  unnest_wider(wiki.results, names_sep = ".")
-test
-
-# RUN ON FULL DATASET
-hot100.raw = hot100.raw %>%
-  mutate(wiki.results = map(wiki.url, scrape.wiki)) %>%
-  unnest_wider(wiki.results)
 ```
 
 ```{r}
-scrape.wiki(hot100.raw$wiki.url[1])
+# apply scraper and ADD columns to dataset
+hot100.raw <- hot100.raw %>%
+  mutate(wiki.results = purrr::map(wiki.url, scrape.wiki)) %>%
+  tidyr::unnest_wider(wiki.results)
 ```
