@@ -140,22 +140,6 @@ hot100.top10 = hot100.raw %>%
 ```
 
 ```{r}
-# testing one url
-wiki.url = hot100.raw$wiki.url[1]
-
-# reads url
-page = read_html(wiki.url)
-rows = page %>%
-  html_elements(".infobox tr") %>%
-  html_text2()
-rows
-
-# gets song's length, label, and genre 
-rows %>% str_subset("Length")
-rows %>% str_subset("Label")
-rows %>% str_subset("Genre|Genres")
-
-
 # FUNCTION: SCRAPING FOR ADDITIONAL SONG INFORMATION
 
 # takes in a url and scrapes the site for the song length, label, and genre(s)
