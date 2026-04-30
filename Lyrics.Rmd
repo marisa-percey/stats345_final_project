@@ -1,0 +1,27 @@
+---
+title: "Lyrics"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+hot100_top10 <- read_csv("hot100_top10.csv")
+```
+
+
+```{r}
+lines <- hot100_top10 %>%
+  separate_rows(lyrics, sep = "\n") %>% filter(lyrics != "")
+
+line_counts <- lines %>% 
+  count(rank, year, artist, title, lyrics, sort = TRUE) %>% filter(n != 1)
+
+```
+
+
