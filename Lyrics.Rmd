@@ -24,4 +24,22 @@ line_counts <- lines %>%
 
 ```
 
-
+```{r}
+count_title_repeats = function(lyrics, title) {
+  
+  if (is.na(lyrics) | is.na(title)) return(NA_integer_)
+  
+  lyrics_clean = tolower(lyrics)
+  title_clean  = tolower(title)
+  
+  # remove punctuation
+  lyrics_clean = stringr::str_replace_all(lyrics_clean, "[^a-z0-9\\s]", "")
+  title_clean  = stringr::str_replace_all(title_clean, "[^a-z0-9\\s]", "")
+  
+  count = stringr::str_count(lyrics_clean, stringr::fixed(title_clean))
+  
+  return(count)
+}
+hot100_top10 = hot100_top10 %>%
+  mutate(title_repeat_count = mapply(count_title_repeats, lyrics, title))
+```
