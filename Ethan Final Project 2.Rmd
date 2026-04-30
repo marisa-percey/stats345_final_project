@@ -1,0 +1,219 @@
+---
+title: "STAT345 - FINAL PROJECT"
+author: "Ava Woodruff, Marissa Percey, Ethan Leader, Layne Peters"
+date: "2026-04-21"
+output: html_document
+---
+
+``` {r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+``` {r libraries}
+library(rvest)
+library(tidyverse)
+library(purrr)
+```
+
+``` {r source}
+# WIKIPEDIA: SOURCED BILLBOARD LINKS
+billboard.links = read_html("https://en.wikipedia.org/wiki/Category:Lists_of_Billboard_Year-End_Hot_100_singles") %>%
+  html_elements("#mw-pages a") %>%
+  html_attr("href") %>%
+  keep(~ str_detect(.x, "Billboard_Year-End_Hot_100_singles_of_[0-9]{4}$")) %>%
+  str_c("https://en.wikipedia.org", .)
+```
+
+``` {r functions}
+# FUNCTION: SCRAPING EACH BILLBOARD YEAR FOR INFORMATION AND SONG LINKS
+scrape.year = function(url) {
+  
+  billboard.page = read_html(url)
+  
+  year = str_extract(url, "[0-9]{4}")
+  message("Scraping: ", year)
+  Sys.sleep(1)
+  
+  song.links = billboard.page %>%
+    html_elements("table.wikitable tr") %>% .[-1] %>%
+    map_chr(~ {
+      link = .x %>% html_element("td:nth-child(2) a") %>% html_attr("href")
+      if(is.na(link)) 
+        NA_character_
+      else 
+        str_c("https://en.wikipedia.org", link)})
+  
+  billboard.page %>%
+    html_element("table.wikitable") %>%
+    html_table() %>%
+    as_tibble() %>%
+    rename_with(~ "rank.col", any_of(c("№", "No."))) %>%
+    mutate(year = year, wiki.url = song.links) %>%
+    select(year, rank = rank.col, title = `Title`, artist = `Artist(s)`, wiki.url)
+}
+
+# FUNCTION: BUILDING SONGLYRICS URL PATH, SCRAPING LYRICS
+scrape.songlyrics = function(artist, title) {
+  # BUILD SONGLYRICS URL
+  artist.clean = artist %>%
+    str_to_lower() %>%
+    str_replace_all("&", "and") %>%
+    str_replace_all("[^a-z0-9]", "-") %>%
+    str_replace_all("-+", "-") %>%
+    str_remove("^-") %>%
+    str_remove("-$")
+  
+  title.clean = title %>%
+    str_to_lower() %>%
+    str_replace_all("&", "and") %>%
+    str_replace_all("[^a-z0-9]", "-") %>%
+    str_replace_all("-+", "-") %>%
+    str_remove("^-") %>%
+    str_remove("-$")
+  
+  songlyrics.url = str_c("https://www.songlyrics.com/", artist.clean, "/", title.clean, "-lyrics/")
+  
+  # STATUS/ITERATION MESSAGE W/PAUSING REQUESTS
+  i <<- i + 1
+  if (i %% 100 == 0) {
+    message("Pausing... ", i)
+    Sys.sleep(60)
+  } else {
+    message("Validating Row ", i, ": ", songlyrics.url)
+    Sys.sleep(0.5)
+  }
+  
+  # VALIDATION AND SCRAPING SUPPOSED URL
+  tryCatch({
+    songlyrics.page = read_html(songlyrics.url)
+    
+    # QUERYING/SEARCHING PAGE FOR LYRICS MARKER, SCRAPING
+    lyrics = songlyrics.page %>%
+      html_element("#songLyricsDiv") %>%
+      html_text2()
+    
+    if (is.na(lyrics)) {
+      list(songlyrics.url = NA_character_, lyrics = NA_character_)
+    } else {
+        list(songlyrics.url = songlyrics.url, lyrics = lyrics)
+    }
+    
+  }, error = function(e) {
+      list(songlyrics.url = NA_character_, lyrics = NA_character_)
+  })
+}
+```
+
+``` {r extraction}
+hot100.raw = billboard.links[1] %>%
+  map(scrape.year) %>%
+  list_rbind()
+```
+
+``` {r}
+i = 0
+hot100.raw = hot100.raw %>%
+  mutate(results = map2(artist, title, scrape.songlyrics)) %>%
+  unnest_wider(results)
+```
+
+```{r}
+scrape.wiki = function(wiki.url) {
+  
+  tryCatch({
+    
+    page = read_html(wiki.url)
+    
+    rows = page %>%
+      html_elements(".infobox tr") %>%
+      html_text2()
+    
+    get_one <- function(x, pattern, remove_pattern = pattern) {
+      val <- x %>%
+        str_subset(pattern) %>%
+        str_remove(remove_pattern) %>%
+        str_trim()
+      
+      if (length(val) == 0) return(NA_character_)
+      val[1]   # ALWAYS take just one
+    }
+    
+    list(
+      song.length = get_one(rows, "Length"),
+      label       = get_one(rows, "Label"),
+      genre = rows %>%
+      str_subset("Genre|Genres") %>%
+      str_remove("Genre|Genres") %>%
+      str_replace_all("\\[[0-9]+\\]", "") %>%
+      str_replace_all("\n", ", ") %>%
+      str_squish() %>%
+      str_remove("^,\\s*") %>%
+      { if (length(.) == 0) NA_character_ else .[1] }
+        )
+    
+  }, error = function(e) {
+    
+    list(
+      song.length = NA_character_,
+      label = NA_character_,
+      genre = NA_character_
+    )
+  })
+}
+```
+
+```{r}
+top10 <- read_csv("hot100_top10.csv")
+```
+```{r}
+top10 <- top10 %>%
+  mutate(wiki.results = map(wiki.url, scrape.wiki)) %>%
+  unnest_wider(wiki.results)
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+hot100_top10 <- top10
+```
+
+
+```{r}
+lines <- hot100_top10 %>%
+  separate_rows(lyrics, sep = "\n") %>% filter(lyrics != "")
+
+line_counts <- lines %>% 
+  count(rank, year, artist, title, lyrics, sort = TRUE) %>% filter(n != 1)
+
+top10 <- top10 %>%
+  left_join(
+    line_counts %>%
+      group_by(rank, year, artist, title) %>%
+      summarise(line_repeat_count = sum(n), .groups = "drop"),
+    by = c("rank", "year", "artist", "title")
+  )
+
+```
+
+```{r}
+count_title_repeats = function(lyrics, title) {
+  
+  if (is.na(lyrics) | is.na(title)) return(NA_integer_)
+  
+  lyrics_clean = tolower(lyrics)
+  title_clean  = tolower(title)
+  
+  # remove punctuation
+  lyrics_clean = stringr::str_replace_all(lyrics_clean, "[^a-z0-9\\s]", "")
+  title_clean  = stringr::str_replace_all(title_clean, "[^a-z0-9\\s]", "")
+  
+  count = stringr::str_count(lyrics_clean, stringr::fixed(title_clean))
+  
+  return(count)
+}
+top10 = top10 %>%
+  mutate(title_repeat_count = mapply(count_title_repeats, lyrics, title))
+```
+
