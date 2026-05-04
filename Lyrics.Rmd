@@ -1,45 +1,136 @@
 ---
-title: "Lyrics"
+title: "Lyrics Repeating"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
 
 ```{r}
 library(readr)
 library(dplyr)
 library(tidyr)
-hot100_top10 <- read_csv("hot100_top10.csv")
+library(ggplot2)
+library(forcats)
+library(stringr)
+library(lubridate)
 ```
 
+```{r}
+#reads in the hot100_top10 csv
+hot100_top10 <- read_csv("hot100_top10.csv")
+top10_full <- read_csv("top10_full.csv")
+```
 
 ```{r}
+#takes the top10 and seperates the lyrics line by line, then removes the lines where there is nothing in it
+lines2 <- top10_full %>%
+  separate_rows(lyrics, sep = "\n") %>% filter(lyrics != "")
+
+#takes the lines, then takes the rank, year, artist, title, and lyrics and sorts it. from there it removes when the lyric is only sung once
+line_counts2 <- lines2 %>% 
+  count(rank, year, artist, title, lyrics, song.length, genre, label, line_repeat_count, title_repeat_count, sort = TRUE) %>% filter(n != 1)
+```
+
+```{r}
+#takes the hot100_top10 and seperates the lyrics line by line, then removes the lines where there is nothing in it
 lines <- hot100_top10 %>%
   separate_rows(lyrics, sep = "\n") %>% filter(lyrics != "")
 
+#takes the lines, then takes the rank, year, artist, title, and lyrics and sorts it. from there it removes when the lyric is only sung once
 line_counts <- lines %>% 
   count(rank, year, artist, title, lyrics, sort = TRUE) %>% filter(n != 1)
+
+
+
+data_ranked <- line_counts %>%
+  arrange(desc(rank))
+
+ggplot(data_ranked, aes(x=rank)) +
+  geom_bar() 
 
 ```
 
 ```{r}
-count_title_repeats = function(lyrics, title) {
-  
-  if (is.na(lyrics) | is.na(title)) return(NA_integer_)
-  
-  lyrics_clean = tolower(lyrics)
-  title_clean  = tolower(title)
-  
-  # remove punctuation
-  lyrics_clean = stringr::str_replace_all(lyrics_clean, "[^a-z0-9\\s]", "")
-  title_clean  = stringr::str_replace_all(title_clean, "[^a-z0-9\\s]", "")
-  
-  count = stringr::str_count(lyrics_clean, stringr::fixed(title_clean))
-  
-  return(count)
-}
-hot100_top10 = hot100_top10 %>%
-  mutate(title_repeat_count = mapply(count_title_repeats, lyrics, title))
+lines2_clean <- lines2 %>%
+  filter(!is.na(line_repeat_count))
+top_genres <- lines2_clean %>%
+  count(genre, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  pull(genre)
+
+lines2_top <- lines2_clean %>%
+  filter(genre %in% top_genres)
+
+lines_clean <- lines2_top %>%
+  # 1. Remove rows where Genre is NA
+  filter(!is.na(genre), genre != "NA") %>% 
+  # 2. Combine the two levels into one
+  mutate(genre = fct_recode(genre, 
+                            "Pop, R&B" = "R&B, pop"))
+
+# Now plot using df_clean
+ggplot(lines_clean, aes(x = line_repeat_count, y = genre)) +
+  geom_boxplot() +
+  labs(title = "Repetitiveness by Genre (Top Genres)")
+```
+
+```{r}
+
+
+lines_clean2 <- lines_clean %>%
+  # remove rows where genre or song_length is missing
+  filter(!is.na(genre), genre != "na", !is.na(song.length)) %>%
+  # extract just the time (e.g., "6:25") and convert to seconds
+  mutate(
+    # remove anything in parentheses like "(full version)"
+    time_clean = str_extract(song.length, "\\d+:\\d+"),
+    # convert "mm:ss" to total seconds
+    duration_secs = period_to_seconds(ms(time_clean))
+  )
+
+# 3. plot using the new numeric 'duration_secs'
+ggplot(lines_clean2, aes(x = duration_secs, y = line_repeat_count)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red") + 
+  labs(
+    title = "song length vs. repetitiveness",
+    x = "song length (total seconds)",
+    y = "line repetition count"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+clean_labels <- line_counts2 %>%
+  filter(!is.na(label), label != "na") %>%
+  mutate(
+    # remove anything in parentheses
+    label = str_split_i(label, "\\(", 1),
+    label = str_trim(label),
+    label = str_to_title(label)
+  )
+
+# 2. find the names of the top 10 most frequent labels
+top_10_names <- clean_labels %>%
+  count(label, sort = TRUE) %>%
+  head(10) %>%
+  pull(label)
+
+# 3. filter the main data to keep only those 10 names
+label_top_10 <- clean_labels %>%
+  filter(label %in% top_10_names) %>%
+  mutate(label = fct_reorder(label, line_repeat_count, .fun = median))
+
+# 4. plot
+ggplot(label_top_10, aes(x = line_repeat_count, y = label)) +
+  geom_boxplot(fill = "blue", alpha = 0.7) +
+  labs(
+    title = "repetition count: top 10 record labels",
+    x = "line repetition count",
+    y = "record label"
+  ) +
+  theme_minimal()
+
 ```
