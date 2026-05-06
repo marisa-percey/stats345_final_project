@@ -63,9 +63,9 @@ lines2_top <- lines2_clean %>%
   filter(genre %in% top_genres)
 
 lines_clean <- lines2_top %>%
-  # 1. Remove rows where Genre is NA
+  #Remove rows where Genre is NA
   filter(!is.na(genre), genre != "NA") %>% 
-  # 2. Combine the two levels into one
+  #Combine the two levels into one
   mutate(genre = fct_recode(genre, 
                             "Pop, R&B" = "R&B, pop"))
 
@@ -81,7 +81,7 @@ ggplot(lines_clean, aes(x = line_repeat_count, y = genre)) +
 lines_clean2 <- lines_clean %>%
   # remove rows where genre or song_length is missing
   filter(!is.na(genre), genre != "na", !is.na(song.length)) %>%
-  # extract just the time (e.g., "6:25") and convert to seconds
+  #extract just the time (e.g., "6:25") and convert to seconds
   mutate(
     # remove anything in parentheses like "(full version)"
     time_clean = str_extract(song.length, "\\d+:\\d+"),
@@ -89,7 +89,7 @@ lines_clean2 <- lines_clean %>%
     duration_secs = period_to_seconds(ms(time_clean))
   )
 
-# 3. plot using the new numeric 'duration_secs'
+# plot using the new numeric 'duration_secs'
 ggplot(lines_clean2, aes(x = duration_secs, y = line_repeat_count)) +
   geom_point(alpha = 0.5, color = "blue") +
   geom_smooth(method = "lm", color = "red") + 
@@ -112,24 +112,38 @@ clean_labels <- line_counts2 %>%
     label = str_to_title(label)
   )
 
-# 2. find the names of the top 10 most frequent labels
+# find the names of the top 10 most frequent labels
 top_10_names <- clean_labels %>%
   count(label, sort = TRUE) %>%
   head(10) %>%
   pull(label)
 
-# 3. filter the main data to keep only those 10 names
+#filter the main data to keep only those 10 names
 label_top_10 <- clean_labels %>%
   filter(label %in% top_10_names) %>%
   mutate(label = fct_reorder(label, line_repeat_count, .fun = median))
 
-# 4. plot
+ #plot
 ggplot(label_top_10, aes(x = line_repeat_count, y = label)) +
   geom_boxplot(fill = "blue", alpha = 0.7) +
   labs(
     title = "repetition count: top 10 record labels",
     x = "line repetition count",
     y = "record label"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+
+ggplot(lines_clean2, aes(x = year, y = line_repeat_count)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red") + 
+  labs(
+    title = "Year vs. Repetitiveness",
+    x = "Year",
+    y = "Line Repetition Count"
   ) +
   theme_minimal()
 
