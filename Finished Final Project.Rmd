@@ -1,0 +1,612 @@
+---
+title: "STAT345 - FINAL PROJECT"
+author: "Ava Woodruff, Marisa Percey, Ethan Leader, Layne Peters"
+date: "2026-04-21"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+**Summary of Analysis:**
+
+-   Title Repetition:
+    -   Repetition shows little correlation with year, song length, or chart rank, with most songs staying below 20 repetitions.
+    -   Disco and labels like Virgin and RSO have the highest repetition levels, while Soft rock has the lowest. Columbia shows the widest variation.
+    -   R&B and Pop/R&B contain the most extreme outliers, with some songs exceeding 40 title repetitions.
+    -   Most songs fall between 100–300 seconds and 0–20 title repetitions, making highly repetitive songs uncommon.
+-   Line Repetition:
+    -   Pop, R&B, and Pop rock songs tend to have the most repetitive lyrics, while Country and Soft rock are generally less repetitive.
+    -   Record labels strongly influence repetition style: Columbia songs are the most repetitive, while Motown songs are the least.
+    -   Song length has only a weak relationship with repetition, meaning longer songs are not always more repetitive.
+    -   Lyric repetition has generally increased over time, but chart rank shows little connection to repetition levels.
+
+```{r libraries, echo = FALSE, message = FALSE, warning = FALSE}
+library(rvest)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(forcats)
+library(stringr)
+library(lubridate)
+```
+
+```{r source, echo = FALSE, message = FALSE, warning = FALSE}
+# WIKIPEDIA: SOURCED BILLBOARD LINKS
+
+# sets desired years to extract data from
+years <- c(1959:2025)
+
+# concatenates url with the years to get wikipedia links
+billboard.links <- str_c("https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_", years)
+```
+
+```{r function1, echo = FALSE, message = FALSE, warning = FALSE}
+# FUNCTION: SCRAPING EACH BILLBOARD YEAR FROM BILLBOARD.LINKS
+# Takes URL--Billboard Top 100 (Year)--extracts the wikitable
+# Returns tibble w/ year, rank, title, artist, and wiki.url--the embedded wikipedia link to each song for further scraping information
+scrape.year = function(url) {
+  
+  # READ URL
+  billboard.page = read_html(url)
+  
+  # MESSAGE PRINTS OUT PROGRESS OF SCRAPING BILLBOARDS
+  year = str_extract(url, "[0-9]{4}")
+  message("Scraping: ", year)
+  
+  # SETS TIMER TO "SLEEP" BETWEEN SCRAPES
+  Sys.sleep(1)
+  
+  # EXTRACTS URL OF EACH SONG FROM WIKIPEDIA
+  song.links = billboard.page %>%
+    html_elements("table.wikitable tr") %>%
+    
+    # DROP THE TABLE HEADER
+    .[-1] %>%
+    map_chr(~ {
+      link = .x %>% html_element("td:nth-child(2) a") %>% html_attr("href")
+      
+      # SETS SONGS W/O WIKIPEDIA PAGES/EMBEDDED LINKS TO N/A
+      if(is.na(link)) 
+        NA_character_
+      else 
+        str_c("https://en.wikipedia.org", link)})
+  
+  # CREATES TIBBLE W/ RANK (RENAMED FROM № and No.), ARTIST, AND TITLE
+  billboard.page %>%
+    html_element("table.wikitable") %>%
+    html_table() %>%
+    as_tibble() %>%
+    
+    # CATCH RANK DISCREPANCIES OF WIKITABLE
+    rename_with(~ "rank.col", any_of(c("№", "No."))) %>%
+    
+    # ADD YEAR AND WIKI.URL COLUMNS TO TIBBLE
+    mutate(year = year, wiki.url = song.links) %>%
+    select(year, rank = rank.col,  artist = `Artist(s)`, title = `Title`, wiki.url)
+}
+```
+
+```{r function2, echo = FALSE, message = FALSE, warning = FALSE}
+# FUNCTION: BUILDING SONGLYRICS URL PATH, SCRAPING LYRICS FROM SOURCE
+# Takes artist and title from our tibble of extracted wikipedia billboard tables
+# Returns songlyrics URL and lyrics of billboard songs, upon successful replication of URL schema and finds lyrics page--lyrics html element
+scrape.songlyrics = function(artist, title) {
+  
+  # HELPER FUNCTIONS
+  # CLEAN AND STANDARDIZE EXPRESSION (ARTIST, TITLE)
+  clean.string = function(x) {
+    x %>%
+      str_remove("/.*$") %>%
+      str_to_lower() %>%
+      str_replace_all("&", "") %>%
+      str_replace_all("part\\s+([0-9]+)", "pt-\\1") %>% 
+      str_replace_all("part\\s+(i{1,3}|iv|vi{0,3}|ix)", "pt-\\1") %>%
+      str_replace_all("[^a-z0-9]", "-") %>%
+      str_replace_all("-+", "-") %>%
+      str_remove("^-") %>%
+      str_remove("-$")
+  }
+  
+  # ATTEMPT TO SCRAPE LYRICS FROM URL
+  try.scrape = function(url) {
+    
+    tryCatch({
+      songlyrics.page = read_html(url)
+      
+      # QUERYING/SEARCHING PAGE FOR LYRICS ELEMENT
+      lyrics = songlyrics.page %>%
+        html_element("#songLyricsDiv") %>%
+        html_text2()
+      if (is.na(lyrics)) NULL
+      else list(songlyrics.url = url, lyrics = lyrics)
+    }, error = function(e) NULL)
+  }
+  
+  # STATUS/ITERATION MESSAGE W/PAUSING REQUESTS
+  # SETS TIMER TO "SLEEP" BETWEEN SCRAPES
+  i <<- i + 1
+  if (i %% 100 == 0) {
+    message("Pausing... ", i)
+    Sys.sleep(60)
+  } else {
+    Sys.sleep(5)
+  }
+  message("Validating ", i, ": ", artist, " - ", title)
+  
+  # CLEAN STRINGS
+  artist.clean = clean.string(artist)
+  title.clean = clean.string(title)
+  
+  # BUILD PRIMARY URL (W/ FULL ARTIST CONTEXT)
+  primary.url = str_c("https://www.songlyrics.com/", artist.clean, "/", title.clean, "-lyrics/")
+  
+  # BUILD SECONDARY URL (W/O "FEATURED" ARTIST)
+  without.featured = artist %>%
+    str_remove_all(regex("\\s*featuring.*$", ignore_case = TRUE)) %>%
+    clean.string()
+  secondary.url = str_c("https://www.songlyrics.com/", without.featured, "/", title.clean, "-lyrics/")
+  
+  # BUILD TERTIARY URL (W/O "AND" ARTIST)
+  without.and = artist %>%
+    str_remove_all(regex("\\s*and.*$", ignore_case = TRUE)) %>%
+    clean.string()
+  tertiary.url = str_c("https://www.songlyrics.com/", without.and, "/", title.clean, "-lyrics/")
+  
+  # BUILD QUATERNARY URL (W/O "," ARTIST)
+  without.comma = artist %>%
+    str_remove_all(regex(",.*$", ignore_case = TRUE)) %>%
+    clean.string()
+  quaternary.url = str_c("https://www.songlyrics.com/", without.comma, "/", title.clean, "-lyrics/")
+  
+  # PRIMARY ATTEMPT
+  result = try.scrape(primary.url)
+  
+  # SECONDARY ATTEMPT
+  if (is.null(result)) result = try.scrape(secondary.url)
+  
+  # TERTIARY ATTEMPT
+  if (is.null(result)) result = try.scrape(tertiary.url)
+  
+  # QUATERNARY ATTEMPT
+  if (is.null(result)) result = try.scrape(quaternary.url)
+  
+  if (is.null(result)) {
+    list(songlyrics.url = NA_character_, lyrics = NA_character_)
+  } else {
+    result
+  }
+}
+```
+
+```{r function3, echo = FALSE, message = FALSE, warning = FALSE}
+# FUNCTION: SCRAPING ADDITIONAL SONG INFORMATION WIKIPEDIA SONG PAGES STORED AS WIKI.URL
+# Takes URL--wiki.url--extracts the wikipedia infobox with peripheral information.
+# Returns a list including length, label, genre of song through scraping.
+scrape.wiki = function(url) {
+  
+  # SKIP NAs
+  if (is.na(url)) 
+    return(list(
+      song.length = NA_character_,
+      song.label = NA_character_,
+      song.genre = NA_character_))
+  
+  # ITERATION MESSAGE
+  Sys.sleep(1)
+  message("Scraping: ", url)
+  
+  tryCatch({
+    song.page = read_html(url)
+    
+    wiki.infobox = song.page %>%
+      html_elements(".infobox tr") %>%
+      html_text2()
+    
+    # HELPER FUNCTION
+    # SEARCHES INFOBOX FOR EXPRESSION 
+    parse.infobox = function(x, pattern, remove_pattern = pattern) {
+      
+      # EXTRACT EVERYTHING ELSE EXCEPT EXPRESSION 
+      infobox.label = x %>%
+        str_subset(pattern) %>%
+        str_remove(remove_pattern) %>%
+        str_trim()
+      
+      # NOT IN INFOBOX, NA
+      if (length(infobox.label) == 0) return(NA_character_)
+      
+      # RETURN JUST ONE
+      infobox.label[1]
+    }
+    
+    # EXTRACTION
+    list(
+      song.length = parse.infobox(wiki.infobox, "Length"),
+      song.label = parse.infobox(wiki.infobox, "Label"),
+      song.genre = wiki.infobox %>%
+        str_subset("Genre|Genres") %>%
+        str_remove("Genre|Genres") %>%
+        str_replace_all("\\[[0-9]+\\]", "") %>%
+        str_replace_all("\n", ", ") %>%
+        str_squish() %>%
+        str_remove("^,\\s*") %>%
+        { if (length(.) == 0) NA_character_ else .[1] })
+    }, error = function(e) {
+      list(
+        song.length = NA_character_,
+        song.label = NA_character_,
+        song.genre = NA_character_
+      )
+  })
+}
+```
+
+```{r function4, echo = FALSE, message = FALSE, warning = FALSE}
+# FUNCTION: counts the number of times the song title gets repeated throughout each song
+# takes in a csv file name
+# returns a count of how many times the title of a song repeats in the lyrics
+title.measure <- function(csv) {
+  
+  # read the csv file
+  hot100.top10 <- read_csv(csv)
+  
+  # ensure columns exist
+  required.cols <- c("year", "rank", "title", "artist", "wiki.url", "songlyrics.url", "lyrics")
+  missing.cols <- setdiff(required.cols, names(hot100.top10))
+  
+  # error checking for missing values
+  if (length(missing.cols) > 0) {
+    stop(paste("Missing required columns:", paste(missing.cols, collapse = ", ")))
+  }
+  
+  # helper function to clean and standardize text, make lowercase and remove punctuation
+  clean.text <- function(x) {
+    x |> tolower() |> 
+      gsub("[[:punct:]]", " ", x = _) |> 
+      gsub("\\s+", " ", x = _) |> 
+      trimws()
+  }
+  
+  # count title occurrences for each row, return 0 if no lyrics found
+  hot100.top10$title.repeats <- mapply(function(title, lyrics) {
+    if (is.na(lyrics) || lyrics == "") return(0)
+    
+    # use helper function to clean title and lyrics
+    title.clean  <- clean.text(title)
+    lyrics.clean <- clean.text(lyrics)
+    
+    # count occurrences of title in lyrics
+    length(gregexpr(title.clean, lyrics.clean, fixed = TRUE)[[1]])
+  }, hot100.top10$title, hot100.top10$lyrics)
+  
+  # remove titles that are not said in lyrics
+  hot100.top10 <- hot100.top10 |> filter(title_repeat_count > 0)
+  
+  # filters out unnecessary columns
+  hot100.top10 <- hot100.top10 |> select("rank", "year", "title", "artist", "lyrics", "song.length", "genre", "line_repeat_count", "title_repeat_count")
+  
+  return(hot100.top10)
+}
+```
+
+```{r function5, echo = FALSE, message = FALSE, warning = FALSE}
+# FUNCTION: counts the number of times a phrase gets repeated throughout each song
+# takes in a csv file name
+# returns a count of how many times a phrase gets repeated in the lyrics from highest to lowest
+phrase.measure = function(csv) {
+
+  # reads in the csv file
+  hot100_top10 <- read_csv(csv)
+
+  # takes the csv and separates the lyrics line by line, then removes the lines where there is nothing in it
+  lines2 <- hot100_top10 %>%
+    separate_rows(lyrics, sep = "\n") %>% 
+    filter(lyrics != "")
+  
+  # takes the lines, then takes the rank, year, artist, title, and lyrics and sorts it
+  # removes when the lyric is only sung once
+  line_counts2 <- lines2 %>% 
+    count(rank, year, artist, title, lyrics, song.length, genre, label, line_repeat_count, title_repeat_count, sort = TRUE) %>% 
+    filter(n != 1)
+  
+  # takes the csv and separates the lyrics line by line
+  # removes the lines where there is nothing in it
+  lines <- hot100_top10 %>%
+    separate_rows(lyrics, sep = "\n") %>% filter(lyrics != "")
+  
+  # takes the lines, then takes the rank, year, artist, title, and lyrics and sorts it
+  # removes when the lyric is only sung once
+  line_counts <- lines %>% 
+    count(rank, year, artist, title, lyrics, sort = TRUE) %>% 
+    filter(n != 1)
+  
+  # filter out lines that don't repeat
+  lines2_clean <- lines2 %>%
+  filter(!is.na(line_repeat_count))
+
+  # gets only the top genres
+  top_genres <- lines2_clean %>%
+    count(genre, sort = TRUE) %>%
+    slice_head(n = 10) %>%
+    pull(genre)
+  
+  # filter by top genres
+  lines2_top <- lines2_clean %>%
+    filter(genre %in% top_genres)
+  
+  #Remove rows where Genre is NA
+  lines_clean <- lines2_top %>%
+    filter(!is.na(genre), genre != "NA") %>% 
+    
+  #Combine the two levels into one
+  mutate(genre = fct_recode(genre, "Pop, R&B" = "R&B, pop"))
+  
+  lines_clean2 <- lines_clean %>%
+    
+  # remove rows where genre or song_length is missing
+  filter(!is.na(genre), genre != "na", !is.na(song.length)) %>%
+    
+  #extract just the time (e.g., "6:25") and convert to seconds
+  mutate(
+      
+    # remove anything in parentheses like "(full version)"
+    time_clean = str_extract(song.length, "\\d+:\\d+"),
+      
+    # convert "mm:ss" to total seconds
+    duration_secs = period_to_seconds(ms(time_clean))
+  )
+
+  return(lines_clean2)
+}
+```
+
+```{r billboard, echo = FALSE, message = FALSE, warning = FALSE}
+# commented out bc we made a csv, but we wanted to show what we had for our code
+
+# ALL BILLBOARD WIKITABLES, WIKIURLs TO SONGS
+#hot100.raw = billboard.links %>%
+#  map(scrape.year) %>%
+#  list_rbind()
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+# commented out bc we made a csv, but we wanted to show what we had for our code
+
+# makes a csv for hot100
+#hot100.raw = hot100.raw %>%
+#  mutate(wiki.info = map(wiki.url, scrape.wiki)) %>%
+#  unnest_wider(wiki.info)
+
+#write_csv(hot100.raw, "hot100_raw.csv")
+```
+
+```{r lyrics, echo = FALSE, message = FALSE, warning = FALSE}
+# commented out bc we made a csv, but we wanted to show what we had for our code
+
+# TOP 10 FOR EACH YEAR
+#i = 0
+#hot100.full = hot100.raw %>%
+#  mutate(results = map2(artist, title, scrape.songlyrics)) %>%
+#  unnest_wider(results)
+
+#write_csv(hot100.full, "hot100_full.csv")
+
+# RETRY NAs
+#i = 0
+#hot100.full[is.na(hot100.full$lyrics), ] = hot100.full %>%
+#  filter(is.na(lyrics)) %>%
+#  select(-c("songlyrics.url", "lyrics")) %>%
+#  mutate(results = map2(artist, title, scrape.songlyrics)) %>%
+#  unnest_wider(results)
+```
+
+```{r measures, echo = FALSE, message = FALSE, warning = FALSE}
+# measuring title repeats
+title <- title.measure("top10_full.csv")
+
+# measuring phrase repeats
+phrase <- phrase.measure("top10_full.csv")
+
+# sort by rank, highest to lowest
+data_ranked <- phrase %>%
+  arrange(desc(rank))
+data_ranked2 <- title %>%
+  arrange(desc(rank))
+```
+
+```{r plot1, echo = FALSE, message = FALSE, warning = FALSE}
+# plots rank vs. phrase repetitiveness
+ggplot(data_ranked, aes(x=rank)) +
+  geom_bar(fill= "#009E73") + labs(title = "Count of Line Repeats by Rank",
+                                   x = "Rank", 
+                                   y="Count" 
+                                   ) + theme_minimal()
+
+```
+
+**Analysis:**
+
+The bar chart displays the number of lyrics associated with song ranks from 1 to 10. The distribution is bimodal, with ranks 4 and 9 showing the highest lyric counts, while rank 6 has the lowest. Overall, the counts fluctuate across rankings without a clear upward or downward trend. 
+
+```{r plot2, echo = FALSE, message = FALSE, warning = FALSE}
+# plots rank vs. title repetitiveness
+ggplot(data_ranked2, aes(x=rank)) +
+  geom_bar(fill= "#009E73") + labs(title = "Count of Title Repeats by Rank",
+                                   x = "Rank", 
+                                   y="Count"
+                                   ) + theme_minimal()
+```
+
+**Analysis:**
+
+The distribution across the ranks is relatively uniform, spanning between 40 and 50 title repetitions. Although, rank 6 appears to have the highest count at 50, and rank 8 has the lowest count at just over 40. This shows that there is no strong correlation between a song's rank and the chances of its title being repeated throughout the song lyrics.
+
+```{r plot3, echo = FALSE, message = FALSE, warning = FALSE}
+# plot genre vs. phrase repetitiveness
+ggplot(data_ranked, aes(x = line_repeat_count, y = genre, fill = genre)) +
+  geom_boxplot() +
+  labs(title = "Line Repetitiveness by Genre (Top Genres)", 
+       x="Line Repeat Count", 
+       y= "Genre",
+       fill = "Genre")
+```
+
+**Analysis:**
+
+The boxplots compare phrase repetitiveness (line repeat count) across several music genres. The distributions differ by genre, indicating variability in repetition patterns among musical styles. Pop, R&B, and Pop rock genres generally show higher median repeat counts and wider spreads, suggesting greater repetition in lyrics. Country and Soft rock have lower median repeat counts and smaller interquartile ranges, indicating less repetitive lyrics overall. Several genres also contain outliers, showing songs with unusually high or low repetition compared to the rest of the genre.
+
+```{r plot4, echo = FALSE, message = FALSE, warning = FALSE}
+# plot genre vs. title repetitiveness
+ggplot(data_ranked, aes(x = title_repeat_count, y = genre, fill = genre)) +
+  geom_boxplot() +
+  labs(title = "Title Repetitiveness by Genre (Top Genres)", 
+       x="Title Repeat Count", 
+       y= "Genre",
+       fill = "Genre")
+```
+
+**Analysis:**
+
+The distribution shows that the disco genre has the highest median count for title repetitions at 14, and soft rock has the lowest median count at 0. The rest of the medians all are roughly equal, spanning between 6 and 9 repetitions. Country and R&B have the widest variety of repetitions, as the boxplots are much wider than the rest. R&B and Pop, R&B both have the highest outliers at 40+ title repetitions, which is significantly outside the normal range.
+
+```{r plot5, echo = FALSE, message = FALSE, warning = FALSE}
+# plot phrase repetitiveness vs song length using the new numeric 'duration_secs'
+ggplot(data_ranked, aes(x = duration_secs, y = line_repeat_count)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red") + 
+  labs(
+    title = "Song Length vs. Line Repetitiveness",
+    x = "Song Length (total seconds)",
+    y = "Line Repetition Count"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+
+The scatter plot shows a weak-to-moderate positive linear relationship between song length and line repetition. While repetitions tend to increase as songs get longer, the high variability suggests that song length is not the only factor determining how repetitive a song is.
+
+```{r plot 6, echo = FALSE, message = FALSE, warning = FALSE}
+# plot title repetitiveness vs. song length using the new numeric 'duration_secs'
+ggplot(data_ranked, aes(x = duration_secs, y = title_repeat_count)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red") + 
+  labs(
+    title = "Song Length vs. Title Repetitiveness",
+    x = "Song Length (total seconds)",
+    y = "Title Repetition Count"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+
+The red linear regression line indicates a weak positive correlation between song length and the number of title repetitions throughout a song's lyrics. As song length increases, the number of repetitions tend to stay low, below 10. The majority of the data falls where song length is between 100 and 300 seconds and title repetition count is between 0 and 20, with a couple outliers peaking at over 40 repetitions.
+
+```{r plot7, echo = FALSE, message = FALSE, warning = FALSE}
+# clean and standardize labels
+clean_labels <- data_ranked %>%
+  filter(!is.na(label), label != "na") %>%
+  mutate(
+    # remove anything in parentheses
+    label = str_split_i(label, "\\(", 1),
+    label = str_trim(label),
+    label = str_to_title(label)
+  )
+
+# find the names of the top 10 most frequent labels
+top_10_names <- clean_labels %>%
+  count(label, sort = TRUE) %>%
+  head(10) %>%
+  pull(label)
+
+# filter the main data to keep only those 10 names
+label_top_10 <- clean_labels %>%
+  filter(label %in% top_10_names) %>%
+  mutate(label = fct_reorder(label, line_repeat_count, .fun = median))
+
+# plot line repetitiveness vs record label
+ggplot(label_top_10, aes(x = line_repeat_count, y = label, fill = label)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Line Repetition Count: Top 10 Record Labels",
+    x = "Line Repetition Count",
+    y = "Record Label",
+    fill = "Record Label"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+
+The boxplots show that Record Label is a strong predictor of song repetition, with significant differences in "brand style." Labels like Columbia have the highest typical repetition (median \~55), while Motown is the least repetitive (median \~12). The narrow boxes for Rca and J indicate very consistent songwriting, whereas the wide boxes for Arista suggest a much more varied catalog.
+
+```{r plot8, echo = FALSE, message = FALSE, warning = FALSE}
+#plot title repetitiveness vs record label
+ggplot(label_top_10, aes(x = title_repeat_count, y = label, fill = label)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Title Repetition Count: Top 10 Record Labels",
+    x = "Title Repetition Count",
+    y = "Record Label",
+    fill = "Record Label"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+
+The distribution shows a large variety in title repetition count between different record labels. Columbia stands out with the broadest range. Virgin and RSO have the highest medians at 20 and 22, respectively. RCA has the narrowest box, showing a very consistent repetition count, aside from the one outlier. Comparing this plot to the title repetitiveness vs. genre plot, it's safe to assume that Columbia most likely produces songs in the R&B and Pop, R&B genres seeing as both plots have 40+ repetitions for those values.
+
+```{r plot9, echo = FALSE, message = FALSE, warning = FALSE}
+# plot line repetitiveness vs. year
+ggplot(data_ranked, aes(x = year, y = line_repeat_count)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red") + 
+  labs(
+    title = "Year vs. Line Repetitiveness",
+    x = "Year",
+    y = "Line Repetition Count"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+
+This scatter plot shows a positive linear trend over time, suggesting that songs have generally become more repetitive since 1960. While there is significant variation—with some modern songs remaining simple and some older songs being repetitive—the upward slope of the regression line indicates a clear historical shift toward higher line repetition counts in popular music.
+
+```{r plot10, echo = FALSE, message = FALSE, warning = FALSE}
+# plot title repetitiveness vs. year
+ggplot(data_ranked, aes(x = year, y = title_repeat_count)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red") + 
+  labs(
+    title = "Year vs. Title Repetitiveness",
+    x = "Year",
+    y = "Title Repetition Count"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+
+The red linear regression line indicates a very weak positive correlation between title repetition count and year, meaning there is little to no increase in songs repeating their title as time progresses. The majority of data points fall between title repetitions of 0 and 15, with two outliers peaking at 40+, significantly outside the normal range, in the 2000s.
+
+**Decision Making / Trouble Shooting:**
+
+-   We originally wanted to try and get all top 100 songs from each year, but we ran into the problem of the scraping taking too long and getting denied from running too many requests, being rate limited. We tried added the sleep function to make it take breaks in between requests but it still was denying us some of the scrape requests, to the point where we were missing half of the data. So, we decided to just try the top 10 songs from each year which worked well. To collect sufficient data, we had to attempt scraping multiple times over a few days, starting from where our requests were getting restricted or blocked. In the end, we got the majority of our desired data to scrape successfully.
+
+-   When we were constructing the urls to scrape for the songs lyrics, we initially tried scraping from 'azlyrics.com', however, we ran into issues with their urls not being consistent. For example, some of the artist names were altered like "The Weekend" became just "Weekend" in the url, so we decided to switch to 'songlyrics.com' which had a more consistent url pattern. Another issue we ran into with constructing the url was songs with multiple artists and having various different formats, some used "featuring", "and", or just a comma separating the artists, and not all of the artists were listed in the url so we had to filter those out. Some of the older songs just didn't have a lyrics page either so we couldn't pull those, plus there was a couple instrumental songs that simply didn't have lyrics at all. For those cases, which wasn't a lot, we just made them NA in the tibble and filtered them out before we graphed the results.
+
+-   When we scraped the wikipedia pages for the top songs per year there were inconsistencies with the column names. For example, some had "No." or "№" so we just standardized it to be rank for simplicity sake.
+
+-   We also ran into a problem with Ava's laptop not being able to run more than a couple years of requests at a time. We ended up having just Layne try to run the requests and save the results in a csv file to share with the rest of the group.
+
+**Measuring Repetitions:**
+
+-   We ran two different types of repetition measurements; by phrase and by title. For each one, we made a function that would read a csv file of the song lyrics and count the number of times the title or an entire line would repeat throughout the song.
+-   For measuring by title, the function checks that all required columns exist, because some songs don't have lyrics, so it'll just skip over those. Then it cleans/standardizes the text by making it lowercase and removing any punctuation. Then it counts title repetitions in the lyrics for each song, removing songs where the title appears only once or not at all. Finally it returns the filtered data set with the repetition counts included.
+-   For measuring by phrase, the function separates the lyrics into individual lines, removing any blank lines that separated parts of the song. Then it counts how many times each lyric line repeats in a song, filtering out lines that only appear once, and sorts the songs by rank. Finally, it returns a data set showing the repeated lyric phrases and their counts.
